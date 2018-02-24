@@ -8,7 +8,10 @@ import utils
 
 test_set_one_in = 1000
 chunk_count = 12
-input_paths = sys.argv[1:]
+output_directory = sys.argv[1]
+input_paths = sys.argv[2:]
+
+print "Processing %i files into %s" % (len(input_paths), output_directory)
 
 total_game_count = 0
 total_move_count = 0
@@ -23,6 +26,7 @@ class ZlibWriter:
 
 	def close(self):
 		self.f.write(self.comp.flush())
+		self.f.close()
 
 	def __del__(self):
 		self.close()
@@ -64,12 +68,13 @@ def process_game(game, writer):
 	writer[1].advance()
 
 if __name__ == "__main__":
+	P = lambda path: os.path.join(output_directory, path)
 	train_writer = \
-		RoundRobinWriter([ZlibWriter("build/features_%03i.z" % i) for i in xrange(chunk_count)]), \
-		RoundRobinWriter([ZlibWriter("build/moves_%03i.z" % i) for i in xrange(chunk_count)])
+		RoundRobinWriter([ZlibWriter(P("features_%03i.z" % i)) for i in xrange(chunk_count)]), \
+		RoundRobinWriter([ZlibWriter(P("moves_%03i.z" % i)) for i in xrange(chunk_count)])
 	test_writer = \
-		RoundRobinWriter([ZlibWriter("build/test_features.z")]), \
-		RoundRobinWriter([ZlibWriter("build/test_moves.z")])
+		RoundRobinWriter([ZlibWriter(P("test_features.z"))]), \
+		RoundRobinWriter([ZlibWriter(P("test_moves.z"))])
 
 	# Step 1: Read in and generate pairs for every game.
 	for path in input_paths:
@@ -87,8 +92,10 @@ if __name__ == "__main__":
 			if total_game_count % 5000 == 0:
 				print "Games: %6i  Positions: %8i" % (total_game_count, total_move_count)
 
-	train_writer.close()
-	test_writer.close()
+	train_writer[0].close()
+	train_writer[1].close()
+	test_writer[0].close()
+	test_writer[1].close()
 
 	print "Total move count:", total_move_count
 

@@ -45,7 +45,7 @@ def extract_features(board):
 def encode_move(move):
 	encoded = np.zeros((64, 2))
 	encoded[move.from_square,0] = 1
-	encoded[move.to_square,0]   = 1
+	encoded[move.to_square,1]   = 1
 	return encoded
 
 if __name__ == "__main__":
