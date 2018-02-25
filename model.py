@@ -7,12 +7,12 @@ product = lambda l: reduce(lambda x, y: x * y, l, 1)
 
 class ChessNet:
 	INPUT_FEATURE_COUNT = 13
-	FILTERS = 192
-	CONV_SIZE = 3
+	FILTERS = 128
+	CONV_SIZE = 5
 	NONLINEARITY = [tf.nn.relu]
-	BLOCK_COUNT = 6
+	BLOCK_COUNT = 2
 	OUTPUT_CONV_FILTERS = 8
-	FC_SIZES = [OUTPUT_CONV_FILTERS * 64, 128]
+	FC_SIZES = [OUTPUT_CONV_FILTERS * 64, 512, 512, 512, 512, 128]
 
 	def __init__(self):
 		# Construct input/output placeholders.
@@ -34,13 +34,14 @@ class ChessNet:
 		self.parameters = []
 		self.flow = self.input_ph
 		# Stack an initial convolution.
-		self.stack_convolution(3, self.INPUT_FEATURE_COUNT, self.FILTERS)
+		self.stack_convolution(self.CONV_SIZE, self.INPUT_FEATURE_COUNT, self.FILTERS)
 		self.stack_nonlinearity()
 		# Stack some number of residual blocks.
 		for _ in xrange(self.BLOCK_COUNT):
 			self.stack_block()
-		# Stack a final batch-unnormalized 1x1 convolution.
-		self.stack_convolution(1, self.FILTERS, self.OUTPUT_CONV_FILTERS, batch_normalization=False)
+		# Stack a final 1x1 convolution transitioning to fully-connected features.
+		self.stack_convolution(1, self.FILTERS, self.OUTPUT_CONV_FILTERS)
+		self.stack_nonlinearity()
 		# Switch over to fully connected processing by flattening.
 		self.flow = tf.reshape(self.flow, [-1, self.FC_SIZES[0]])
 
@@ -103,10 +104,10 @@ class ChessNet:
 	def stack_block(self):
 		initial_value = self.flow
 		# Stack the first convolution.
-		self.stack_convolution(3, self.FILTERS, self.FILTERS)
+		self.stack_convolution(self.CONV_SIZE, self.FILTERS, self.FILTERS)
 		self.stack_nonlinearity()
 		# Stack the second convolution.
-		self.stack_convolution(3, self.FILTERS, self.FILTERS)
+		self.stack_convolution(self.CONV_SIZE, self.FILTERS, self.FILTERS)
 		# Add the skip connection.
 		self.flow = self.flow + initial_value
 		# Stack on the deferred non-linearity.
