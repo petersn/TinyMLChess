@@ -10,9 +10,9 @@ class ChessNet:
 	FILTERS = 128
 	CONV_SIZE = 5
 	NONLINEARITY = [tf.nn.relu]
-	BLOCK_COUNT = 2
-	OUTPUT_CONV_FILTERS = 8
-	FC_SIZES = [OUTPUT_CONV_FILTERS * 64, 512, 512, 512, 512, 128]
+	BLOCK_COUNT = 8
+	OUTPUT_CONV_FILTERS = 16
+	FC_SIZES = [OUTPUT_CONV_FILTERS * 64, 128]
 
 	def __init__(self):
 		# Construct input/output placeholders.

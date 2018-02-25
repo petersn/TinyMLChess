@@ -19,7 +19,7 @@ total_move_count = 0
 class ZlibWriter:
 	def __init__(self, path):
 		self.f = open(path, "wb")
-		self.comp = zlib.compressobj()
+		self.comp = zlib.compressobj(9)
 
 	def write(self, s):
 		self.f.write(self.comp.compress(s))
@@ -49,32 +49,47 @@ class RoundRobinWriter:
 
 def process_game(game, writer):
 	global total_move_count
+
+	game_outcome = {
+		"1-0": 1,
+		"1/2-1/2": 0,
+		"0-1": -1,
+	}[game.headers["Result"]]
+
 	board = game.board()
 	features  = []
 	moves = []
+	outcomes = []
 	for move in game.main_line():
 		# Get the pre-move board features.
 		features.append(utils.extract_features(board))
 		moves.append(utils.encode_move(move))
+		outcomes.append(game_outcome)
+		# Advance the game.
 		board.push(move)
 		total_move_count += 1
 	# Stream the moves out.
 	assert len(features) == len(moves)
 	features = np.array(features, dtype=np.int8)
 	moves = np.array(moves, dtype=np.int8)
+	outcomes = np.array(outcomes, dtype=np.int8)
 	writer[0].write(features.tostring())
 	writer[1].write(moves.tostring())
+	writer[2].write(outcomes.tostring())
 	writer[0].advance()
 	writer[1].advance()
+	writer[2].advance()
 
 if __name__ == "__main__":
 	P = lambda path: os.path.join(output_directory, path)
 	train_writer = \
 		RoundRobinWriter([ZlibWriter(P("features_%03i.z" % i)) for i in xrange(chunk_count)]), \
-		RoundRobinWriter([ZlibWriter(P("moves_%03i.z" % i)) for i in xrange(chunk_count)])
+		RoundRobinWriter([ZlibWriter(P("moves_%03i.z" % i)) for i in xrange(chunk_count)]), \
+		RoundRobinWriter([ZlibWriter(P("outcomes_%03i.z" % i)) for i in xrange(chunk_count)])
 	test_writer = \
 		RoundRobinWriter([ZlibWriter(P("test_features.z"))]), \
-		RoundRobinWriter([ZlibWriter(P("test_moves.z"))])
+		RoundRobinWriter([ZlibWriter(P("test_moves.z"))]), \
+		RoundRobinWriter([ZlibWriter(P("test_outcomes.z"))])
 
 	# Step 1: Read in and generate pairs for every game.
 	for path in input_paths:
@@ -94,8 +109,10 @@ if __name__ == "__main__":
 
 	train_writer[0].close()
 	train_writer[1].close()
+	train_writer[2].close()
 	test_writer[0].close()
 	test_writer[1].close()
+	test_writer[2].close()
 
 	print "Total move count:", total_move_count
 
