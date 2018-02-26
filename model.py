@@ -11,7 +11,7 @@ class ChessNet:
 	CONV_SIZE = 3
 	NONLINEARITY = [tf.nn.relu]
 	BLOCK_COUNT = 20
-	OUTPUT_CONV_FILTERS = 2
+	OUTPUT_CONV_FILTERS = 64
 #	FC_SIZES = [OUTPUT_CONV_FILTERS * 64, 128]
 
 	def __init__(self):
@@ -22,7 +22,7 @@ class ChessNet:
 			name="input_placeholder")
 		self.desired_output_ph = tf.placeholder(
 			tf.float32,
-			shape=[None, 2, 8, 8],
+			shape=[None, 64, 8, 8],
 			name="desired_output_placeholder")
 		self.learning_rate_ph = tf.placeholder(tf.float32, shape=[], name="learning_rate")
 		self.is_training_ph = tf.placeholder(tf.bool, shape=[], name="is_training")
@@ -55,14 +55,14 @@ class ChessNet:
 		# Reshape the final FC output into two 8x8 layers, one for piece "pick up" and one for "put down".
 #		self.final_output = tf.reshape(self.flow, [-1, 2, 64])
 		# First we merge up the shape.
-		x = tf.reshape(self.flow, [-1, 64, 2])
+		x = tf.reshape(self.flow, [-1, 8 * 8, 64])
 		self.final_output = tf.matrix_transpose(x)
-		reshaped_desired_output = tf.reshape(self.desired_output_ph, [-1, 2, 64])
+		reshaped_desired_output = tf.reshape(self.desired_output_ph, [-1, 64 * 64])
 
 		# Construct the training components.
 		self.cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(
 			labels=reshaped_desired_output,
-			logits=self.final_output,
+			logits=tf.reshape(self.final_output, [-1, 64 * 64]),
 		))
 		regularizer = tf.contrib.layers.l2_regularizer(scale=0.0001)
 		reg_variables = tf.trainable_variables()
@@ -123,14 +123,15 @@ class ChessNet:
 		return self.run_on_samples(self.cross_entropy.eval, samples)
 
 	def get_accuracy(self, samples):
-		results = self.run_on_samples(self.final_output.eval, samples)
+		results = self.run_on_samples(self.final_output.eval, samples).reshape((-1, 64 * 64))
+		#results = results.reshape((-1, 64 * 8 * 8))
 		results = np.argmax(results, axis=-1)
-		assert results.shape == (len(samples["features"]), 2)
+		assert results.shape == (len(samples["features"]),)
 		correct = 0
 		for move, result in zip(samples["moves"], results):
-			lhs = np.argmax(move.reshape((2, 64)), axis=-1)
-			assert lhs.shape == result.shape == (2,)
-			correct += np.all(lhs == result)
+			lhs = np.argmax(move.reshape((64 * 64,)))
+			#assert lhs.shape == result.shape == (2,)
+			correct += lhs == result #np.all(lhs == result)
 		return correct / float(len(samples["features"]))
 
 	def run_on_samples(self, f, samples, learning_rate=0.01, is_training=False):
@@ -160,10 +161,12 @@ def save_model(net, path):
 def load_model(net, path):
 	x_conv_weights, x_bn_params = np.load(path)
 	assert len(net.parameters) == len(x_conv_weights), "Parameter count mismatch!"
+	operations = []
 	for var, value in zip(net.parameters, x_conv_weights):
-		sess.run(var.assign(value))
+		operations.append(var.assign(value))
 	bn_vars = get_batch_norm_vars()
 	assert len(bn_vars) == len(x_bn_params), "Bad batch normalization parameter count!"
 	for var, value in zip(bn_vars, x_bn_params):
-		sess.run(var.assign(value))
+		operations.append(var.assign(value))
+	sess.run(operations)
 
