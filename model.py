@@ -8,11 +8,11 @@ product = lambda l: reduce(lambda x, y: x * y, l, 1)
 class ChessNet:
 	INPUT_FEATURE_COUNT = 13
 	FILTERS = 128
-	CONV_SIZE = 5
+	CONV_SIZE = 3
 	NONLINEARITY = [tf.nn.relu]
-	BLOCK_COUNT = 8
-	OUTPUT_CONV_FILTERS = 16
-	FC_SIZES = [OUTPUT_CONV_FILTERS * 64, 128]
+	BLOCK_COUNT = 20
+	OUTPUT_CONV_FILTERS = 2
+#	FC_SIZES = [OUTPUT_CONV_FILTERS * 64, 128]
 
 	def __init__(self):
 		# Construct input/output placeholders.
@@ -40,20 +40,23 @@ class ChessNet:
 		for _ in xrange(self.BLOCK_COUNT):
 			self.stack_block()
 		# Stack a final 1x1 convolution transitioning to fully-connected features.
-		self.stack_convolution(1, self.FILTERS, self.OUTPUT_CONV_FILTERS)
-		self.stack_nonlinearity()
+		self.stack_convolution(1, self.FILTERS, self.OUTPUT_CONV_FILTERS, batch_normalization=False)
+#		self.stack_nonlinearity()
 		# Switch over to fully connected processing by flattening.
-		self.flow = tf.reshape(self.flow, [-1, self.FC_SIZES[0]])
+#		self.flow = tf.reshape(self.flow, [-1, self.FC_SIZES[0]])
 
 		# Switch over to fully connected processing.
-		for old_size, new_size in zip(self.FC_SIZES, self.FC_SIZES[1:]):
-			W = self.new_weight_variable([old_size, new_size])
-			b = self.new_bias_variable([new_size])
-			self.flow = tf.matmul(self.flow, W) + b
-			self.stack_nonlinearity()
+#		for old_size, new_size in zip(self.FC_SIZES, self.FC_SIZES[1:]):
+#			W = self.new_weight_variable([old_size, new_size])
+#			b = self.new_bias_variable([new_size])
+#			self.flow = tf.matmul(self.flow, W) + b
+#			self.stack_nonlinearity()
 
 		# Reshape the final FC output into two 8x8 layers, one for piece "pick up" and one for "put down".
-		self.final_output = tf.reshape(self.flow, [-1, 2, 64])
+#		self.final_output = tf.reshape(self.flow, [-1, 2, 64])
+		# First we merge up the shape.
+		x = tf.reshape(self.flow, [-1, 64, 2])
+		self.final_output = tf.matrix_transpose(x)
 		reshaped_desired_output = tf.reshape(self.desired_output_ph, [-1, 2, 64])
 
 		# Construct the training components.
@@ -74,7 +77,7 @@ class ChessNet:
 
 	def new_weight_variable(self, shape):
 		self.total_parameters += product(shape)
-		stddev = (2.0 / product(shape[:-1]))**0.5
+		stddev = 0.2 * (2.0 / product(shape[:-1]))**0.5
 		var = tf.Variable(tf.truncated_normal(shape, stddev=stddev))
 		self.parameters.append(var)
 		return var
