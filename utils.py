@@ -43,7 +43,7 @@ def extract_features(board):
 	return features
 
 def encode_move(move):
-	encoded = np.zeros((2, 64))
+	encoded = np.zeros((2, 64), dtype=np.int8)
 	encoded[0, move.from_square] = 1
 	encoded[1, move.to_square]   = 1
 	return encoded
