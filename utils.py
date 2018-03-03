@@ -48,6 +48,60 @@ def encode_move(move):
 	encoded[1, move.to_square]   = 1
 	return encoded
 
+D = lambda x, y: x + y * 8
+queen_moves = sum(
+	([
+		D(0, i), D(i, 0),
+		D(0, -i), D(-i, 0),
+		D(i,  i), D(-i,  i),
+		D(i, -i), D(-i, -i),
+	]
+	for i in xrange(1, 8)),
+	[]
+)
+knight_moves = [
+	D( 1, 2), D( 1, -2),
+	D(-1, 2), D(-1, -2),
+	D( 2, 1), D( 2, -1),
+	D(-2, 1), D(-2, -1),
+]
+all_layers = sorted(queen_moves + knight_moves)
+assert len(all_layers) == 64
+difference_to_layer_index = {diff: i for i, diff in enumerate(all_layers)}
+
+def one_hot_to_large(move):
+	assert move.shape == (2, 8, 8)
+	pick_up, put_down = map(np.argmax, move)
+	difference = put_down - pick_up
+	result = np.zeros((len(all_layers), 64))
+	result[difference_to_layer_index[difference], pick_up] = 1
+	return result.reshape((len(all_layers), 8, 8))
+
+def get_move_score(softmaxed_large_array, move):
+	assert softmaxed_large_array.shape == (64, 8 * 8)
+	# For now don't ever under-promote.
+	if move.promotion not in (None, chess.QUEEN):
+		return -1.0
+	pick_up, put_down = move.from_square, move.to_square
+	difference = put_down - pick_up
+	layer = difference_to_layer_index[difference]
+	posterior = softmaxed_large_array[layer, pick_up]
+	return posterior
+
+def features_to_board(feat):
+	assert feat.shape == (8, 8, 13)
+	feat = np.moveaxis(feat, -1, 0)
+	board = chess.Board("8/8/8/8/8/8/8/8 w KQkq - 0 0")
+	for i, layer in enumerate(feat[:12]):
+		layer = layer.reshape((64,))
+		color = (i / 6) == 0
+		kind = getattr(chess, PIECE_NAMES[i % 6][:-1].upper())
+		piece = chess.Piece(kind, color)
+		for pos, v in enumerate(layer):
+			if v == 1:
+				board.set_piece_at(pos, piece)
+	return board
+
 if __name__ == "__main__":
 	b = chess.Board()
 	b.push_san("e4")

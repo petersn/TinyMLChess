@@ -6,15 +6,14 @@ import chess.pgn
 import numpy as np
 import utils
 
+# Moves must be by players at least this Elo to be included.
+elo_threshold = 2000
 test_set_one_in = 1000
-chunk_count = 12
-output_directory = sys.argv[1]
-input_paths = sys.argv[2:]
-
-print "Processing %i files into %s" % (len(input_paths), output_directory)
+chunk_count = 21
 
 total_game_count = 0
 total_move_count = 0
+rejected_move_count = 0
 
 class ZlibWriter:
 	def __init__(self, path):
@@ -48,7 +47,7 @@ class RoundRobinWriter:
 			w.close()
 
 def process_game(game, writer):
-	global total_move_count
+	global total_move_count, rejected_move_count
 
 	game_outcome = {
 		"1-0": 1,
@@ -56,31 +55,44 @@ def process_game(game, writer):
 		"0-1": -1,
 	}[game.headers["Result"]]
 
+	elos = [int(game.headers.get("WhiteElo", -1)), int(game.headers.get("BlackElo", -1))]
+
 	board = game.board()
-	features  = []
-	moves = []
-	outcomes = []
 	for move in game.main_line():
 		# Get the pre-move board features.
-		features.append(utils.extract_features(board))
-		moves.append(utils.encode_move(move))
-		outcomes.append(game_outcome)
+		features = utils.extract_features(board)
+		move_map = utils.encode_move(move)
+		# Extract who is to win from this position.
+		flip = 1 if board.turn else -1
+		outcome = {0: "\0", 1: "\1", -1: "\xff"}[game_outcome * flip]
+
+		# Write an entry in.
+		current_player_elo = elos[board.turn == chess.BLACK]
+		if current_player_elo >= elo_threshold:
+			writer[0].write(features.tostring())
+			writer[1].write(move_map.tostring())
+			writer[2].write(outcome)
+			writer[0].advance()
+			writer[1].advance()
+			writer[2].advance()
+			total_move_count += 1
+		else:
+			rejected_move_count += 1
+
 		# Advance the game.
 		board.push(move)
-		total_move_count += 1
-	# Stream the moves out.
-	assert len(features) == len(moves)
-	features = np.array(features, dtype=np.int8)
-	moves = np.array(moves, dtype=np.int8)
-	outcomes = np.array(outcomes, dtype=np.int8)
-	writer[0].write(features.tostring())
-	writer[1].write(moves.tostring())
-	writer[2].write(outcomes.tostring())
-	writer[0].advance()
-	writer[1].advance()
-	writer[2].advance()
+
+#	# Stream the moves out.
+#	assert len(features) == len(moves)
+#	features = np.array(features, dtype=np.int8)
+#	moves = np.array(moves, dtype=np.int8)
+#	outcomes = np.array(outcomes, dtype=np.int8)
 
 if __name__ == "__main__":
+	output_directory = sys.argv[1]
+	input_paths = sys.argv[2:]
+	print "Processing %i files into %s" % (len(input_paths), output_directory)
+
 	P = lambda path: os.path.join(output_directory, path)
 	train_writer = \
 		RoundRobinWriter([ZlibWriter(P("features_%03i.z" % i)) for i in xrange(chunk_count)]), \
@@ -105,7 +117,7 @@ if __name__ == "__main__":
 				process_game(game, train_writer)
 			total_game_count += 1
 			if total_game_count % 5000 == 0:
-				print "Games: %6i  Positions: %8i" % (total_game_count, total_move_count)
+				print "Games: %6i  Positions: %8i  (Rejected: %8i))" % (total_game_count, total_move_count, rejected_move_count)
 
 	train_writer[0].close()
 	train_writer[1].close()
@@ -115,4 +127,5 @@ if __name__ == "__main__":
 	test_writer[2].close()
 
 	print "Total move count:", total_move_count
+	print "Rejected moves:  ", rejected_move_count
 
