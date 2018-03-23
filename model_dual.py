@@ -128,7 +128,7 @@ class ChessPolicyNet(ChessBaseNet):
 	OUTPUT_CONV_FILTERS = 64
 	FINAL_OUTPUT_SHAPE = [None, 64, 8, 8]
 
-	def __init__(self, scope_name):
+	def __init__(self, scope_name, build_training=True):
 		self.scope_name = scope_name
 		with tf.variable_scope(scope_name):
 			self.build_tower()
@@ -140,7 +140,8 @@ class ChessPolicyNet(ChessBaseNet):
 			labels=reshaped_desired_output,
 			logits=tf.reshape(self.final_output, [-1, 64 * 64]),
 		))
-		self.build_training()
+		if build_training:
+			self.build_training()
 
 class ChessValueNet(ChessBaseNet):
 	FILTERS = 128
@@ -150,7 +151,7 @@ class ChessValueNet(ChessBaseNet):
 	FINAL_OUTPUT_SHAPE = [None, 64, 8, 8]
 	FC_SIZES = [OUTPUT_CONV_FILTERS * 64, 64, 1]
 
-	def __init__(self, scope_name):
+	def __init__(self, scope_name, build_training=True):
 		self.scope_name = scope_name
 		with tf.variable_scope(scope_name):
 			self.build_tower()
@@ -166,7 +167,8 @@ class ChessValueNet(ChessBaseNet):
 			# Final tanh to map to [-1, 1].
 			self.final_output = tf.nn.tanh(self.flow)
 		self.cross_entropy = tf.reduce_mean(tf.square(self.desired_output_ph - self.final_output))
-		self.build_training()
+		if build_training:
+			self.build_training()
 
 # XXX: This is horrifically ugly.
 # TODO: Once I have a second change it to not do this horrible graph scraping that breaks if you have other things going on.
