@@ -100,7 +100,6 @@ class ChessBaseNet:
 		return self.run_on_samples(self.cross_entropy.eval, samples)
 
 	def get_accuracy(self, samples):
-		return 0.0
 		results = self.run_on_samples(self.final_output.eval, samples).reshape((-1, 64 * 64))
 		#results = results.reshape((-1, 64 * 8 * 8))
 		results = np.argmax(results, axis=-1)
@@ -124,7 +123,7 @@ class ChessBaseNet:
 class ChessPolicyNet(ChessBaseNet):
 	FILTERS = 128
 	CONV_SIZE = 3
-	BLOCK_COUNT = 20
+	BLOCK_COUNT = 10
 	OUTPUT_CONV_FILTERS = 64
 	FINAL_OUTPUT_SHAPE = [None, 64, 8, 8]
 
@@ -169,6 +168,9 @@ class ChessValueNet(ChessBaseNet):
 		self.cross_entropy = tf.reduce_mean(tf.square(self.desired_output_ph - self.final_output))
 		if build_training:
 			self.build_training()
+
+	def get_accuracy(self, samples):
+		return 0.0
 
 # XXX: This is horrifically ugly.
 # TODO: Once I have a second change it to not do this horrible graph scraping that breaks if you have other things going on.

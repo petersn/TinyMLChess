@@ -10,7 +10,7 @@ def process(path):
 	array = np.fromstring(data, dtype=np.float64)
 	print "Read in array of size", len(array)
 	del data
-	fixed = array.cast(np.int8).tostring()
+	fixed = array.astype(np.int8).tostring()
 	del array
 	compress = zlib.compressobj(9)
 	output_path = path + "-fixed.z"

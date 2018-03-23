@@ -3,21 +3,26 @@
 import os, sys, time, json, re, random, subprocess
 import chess, chess.pgn
 
-STOCKFISH_PATH = "stockfish"
+STOCKFISH_PATH = "/home/snp/Stockfish/src/stockfish"
 STOCKFISH_HASH_MB = 1024
-STOCKFISH_MS_PER_MOVE = 500
+STOCKFISH_MS_PER_MOVE = 25
+
+run_index = int(sys.argv[-1])
+print "Running job index:", run_index
 
 all_spots = []
-for path in sys.argv[1:]:
+for path in sys.argv[1:-1]:
 	if not os.path.exists(path + ".index"):
 		continue
 	print "Loading:", path
+	sys.stdout.flush()
 	fd = open(path)
 	spots = json.loads(open(path + ".index").read())
 	for spot in spots:
 		all_spots.append((fd, spot))
 
 print "Parsed in:", len(all_spots)
+sys.stdout.flush()
 
 def sample_game():
 	fd, spot = random.choice(all_spots)
@@ -28,7 +33,7 @@ def sample_game():
 def extract_move(process, board, movetime):
 	process.stdin.write("position fen %s\ngo movetime %i\n" % (board.fen(), movetime))
 	process.stdin.flush()
-	for _ in xrange(movetime / 10):
+	for _ in xrange(movetime / 2):
 		while True:
 			line = process.stdout.readline()
 			m = re.search("bestmove ([^ \\n]+)", line)
@@ -92,6 +97,6 @@ output_file = open(output_path, "a+")
 success = 0
 while True:
 	success += generate_playout(output_file)
-	if success % 10 == 0:
-		print "Generated: %i" % success
+	if success < 3 or success % 200 == 0:
+		print "[%2i] Generated: %i" % (run_index, success)
 
