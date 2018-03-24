@@ -71,8 +71,8 @@ class ChessBaseNet:
 		if batch_normalization:
 			self.flow = tf.layers.batch_normalization(
 				self.flow,
-				center=False,
-				scale=False,
+				center=True,
+				scale=True,
 				training=self.is_training_ph)
 		else:
 			bias = self.new_bias_variable([new_size])
@@ -123,7 +123,7 @@ class ChessBaseNet:
 class ChessPolicyNet(ChessBaseNet):
 	FILTERS = 128
 	CONV_SIZE = 3
-	BLOCK_COUNT = 10
+	BLOCK_COUNT = 20
 	OUTPUT_CONV_FILTERS = 64
 	FINAL_OUTPUT_SHAPE = [None, 64, 8, 8]
 
@@ -143,11 +143,11 @@ class ChessPolicyNet(ChessBaseNet):
 			self.build_training()
 
 class ChessValueNet(ChessBaseNet):
-	FILTERS = 128
+	FILTERS = 96
 	CONV_SIZE = 3
-	BLOCK_COUNT = 20
+	BLOCK_COUNT = 10
 	OUTPUT_CONV_FILTERS = 1
-	FINAL_OUTPUT_SHAPE = [None, 64, 8, 8]
+	FINAL_OUTPUT_SHAPE = [None, 1]
 	FC_SIZES = [OUTPUT_CONV_FILTERS * 64, 64, 1]
 
 	def __init__(self, scope_name, build_training=True):
