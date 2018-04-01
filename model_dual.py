@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+import sys
 import numpy as np
 import tensorflow as tf
 
@@ -143,9 +144,13 @@ class ChessPolicyNet(ChessBaseNet):
 			self.build_training()
 
 class ChessValueNet(ChessBaseNet):
-	FILTERS = 96
+	FILTERS = 128
 	CONV_SIZE = 3
-	BLOCK_COUNT = 10
+	if "--sp" in sys.argv:
+		print >>sys.stderr, "Using other model."
+		BLOCK_COUNT = 10
+	else:
+		BLOCK_COUNT = 20
 	OUTPUT_CONV_FILTERS = 1
 	FINAL_OUTPUT_SHAPE = [None, 1]
 	FC_SIZES = [OUTPUT_CONV_FILTERS * 64, 64, 1]
