@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-import logging, time, sys, random
+import logging, time, sys, random, collections
 import numpy as np
 import tensorflow as tf
 import chess
@@ -31,9 +31,6 @@ def initialize_models():
 	sess = tf.InteractiveSession()
 	sess.run(tf.initialize_all_variables())
 	model.sess = sess
-	#model.load_model(net, "models/joint-model-040.npy")
-	#model.load_model(net, "models/value-12x96-fc64-model-001.npy")
-	#model.load_model(policy_net, "models/joint-model-040.npy")
 	model.load_model(policy_net, policy_path)
 	model.load_model(value_net, value_path)
 
@@ -46,51 +43,7 @@ def estimate_plies_remaining(plies_into_game):
 	offset, a1, c1, a2, b2, c2 = 34.0, 46.1, 38.3, 19.5, 157.8, 15.3
 	return offset + a1 * np.exp(-plies_into_game / c1) + a2 / (1 + np.exp(-(plies_into_game - b2) / c2))
 
-"""
-def policy_score_moves(board):
-	result = tb.play_dtz(board)
-	if result != None:
-		logging.debug("Playing tablebase move.")
-		return [(0.0, result)]
-
-	features = utils.extract_features(board)
-	posterior, = policy_net.final_output.eval(feed_dict={
-		policy_net.input_ph: [features],
-		policy_net.is_training_ph: False,
-	})
-	assert posterior.shape == (64, 8 * 8)
-	posterior = softmax(posterior)
-#	posterior = map(softmax, posterior)
-	def score_move(m):
-		# For now only promote to queens.
-		if m.promotion not in (None, chess.QUEEN):
-			return -1
-		return posterior[0][m.from_square] * posterior[1][m.to_square]
-	return sorted([(utils.get_move_score(posterior, m), m) for m in board.legal_moves], reverse=True)
-#	return sorted([(score_move(m), m) for m in board.legal_moves], reverse=True)
-
-def score_moves(board):
-	result = tb.play_dtz(board)
-	if result != None:
-		logging.debug("Playing tablebase move.")
-		return [(0.0, result)]
-
-	features = []
-	all_moves = []
-	for move in board.legal_moves:
-		board.push(move)
-		all_moves.append(move)
-		features.append(utils.extract_features(board))
-		board.pop()
-	scores = value_net.final_output.eval(feed_dict={
-		value_net.input_ph: features,
-		value_net.is_training_ph: False,
-	}).reshape((-1,))
-#	scores = -scores
-	return sorted(zip(scores, all_moves))
-"""
-
-def compute_posterior(boards):
+def BAD_compute_posterior(boards):
 	boards = [b for b in boards if not hasattr(b, "ML_posterior")]
 	if not boards:
 		return
@@ -110,7 +63,7 @@ def compute_posterior(boards):
 		for m in board.legal_moves:
 			board.ML_posterior[m] = utils.get_move_score(raw_posterior, m)
 
-def compute_value(boards):
+def BAD_compute_value(boards):
 	boards = [b for b in boards if not hasattr(b, "ML_value")]
 	# Try to score by normal rules.
 	for b in boards:
@@ -152,6 +105,115 @@ def compute_value(boards):
 	for board, value in zip(boards, values):
 		board.ML_value, = value
 
+class NNEvaluator:
+	ENSEMBLE_SIZE = 32
+	QUEUE_DEPTH = 4096
+	PROBABILITY_THRESHOLD = 0.09
+	MAXIMUM_CACHE_ENTRIES = 200000
+
+	class Entry:
+		__slots__ = ["board", "value", "posterior", "game_over"]
+
+		def __init__(self, board, value, posterior, game_over):
+			self.board = board
+			self.value = value
+			self.posterior = posterior
+			self.game_over = game_over
+
+	def __init__(self):
+		self.cache = {}
+		self.board_queue = collections.deque(maxlen=NNEvaluator.QUEUE_DEPTH)
+		self.ensemble_sizes = []
+
+	def __repr__(self):
+		return "<NNEvaluator cache=%i queue=%i>" % (len(self.cache), len(self.board_queue))
+
+	@staticmethod
+	def board_key(b):
+		return (
+			b.turn,
+			b.pawns,
+			b.knights,
+			b.bishops,
+			b.rooks,
+			b.queens,
+			b.kings,
+			b.occupied_co[0],
+		)
+
+	def __contains__(self, board):
+		return NNEvaluator.board_key(board) in self.cache
+
+	def evaluate(self, input_board):
+		# Build up an ensemble to evaluate together.
+		ensemble = [input_board]
+		while self.board_queue and len(ensemble) < NNEvaluator.ENSEMBLE_SIZE:
+			queued_board = self.board_queue.popleft()
+			# The board might have been evaluated since we queued it, in which case skip it.
+			# TODO: Evaluate if this is worth it. How many transpositions do we get?
+			if queued_board not in self:
+				ensemble.append(queued_board)
+
+		# Evaluate the boards together.
+		self.ensemble_sizes.append(len(ensemble))
+		features = map(utils.extract_features, ensemble)
+		posteriors = policy_net.final_output.eval(feed_dict={
+			policy_net.input_ph: features,
+			policy_net.is_training_ph: False,
+		})
+		values = value_net.final_output.eval(feed_dict={
+			value_net.input_ph: features,
+			value_net.is_training_ph: False,
+		})
+
+		# Write an entry into our cache.
+		for board, raw_posterior, (value,) in zip(ensemble, posteriors, values):
+			raw_posterior = softmax(raw_posterior)
+			posterior = {move: utils.get_move_score(raw_posterior, move) for move in board.legal_moves}
+			# Renormalize the posterior. Add a small epsilon into the denominator to prevent divison by zero.
+			denominator = sum(posterior.itervalues()) + 1e-6
+			posterior = {move: prob / denominator for move, prob in posterior.iteritems()}
+			entry = NNEvaluator.Entry(board=board, value=value, posterior=posterior, game_over=False)
+			self.cache[NNEvaluator.board_key(board)] = entry
+
+	def add_to_queue(self, board):
+		if board not in self:
+			self.board_queue.append(board)
+
+	def populate(self, board):
+		# XXX: This is ugly...
+		if hasattr(board, "evaluations"):
+			return
+
+		# Get base value and posterior, independent of special value adjustments.
+		if board not in self:
+			self.evaluate(board)
+		entry = self.cache[NNEvaluator.board_key(board)]
+		# Evaluate special value adjustments.
+		# Adjustment #1: The game is mate, stalemate, 50 move rule, or is a three-fold repetition.
+		result = board.result(claim_draw=True)
+		if result != "*":
+			outcome_for_white = {"1-0": 1, "0-1": -1, "1/2-1/2": 0}[result]
+			outcome_for_current_player = outcome_for_white * (1 if board.turn else -1)
+			entry.value = float(outcome_for_current_player)
+			entry.game_over = True
+		else:
+			# NB: It is *critical* that we not let tablebase values override basic scoring,
+			# or we get draws by repetition and 50 move rule wrong.
+			# Adjustment #2: Score by tablebase.
+			# XXX: TODO: Properly take into account board.halfmove_clock.
+			score = tb.score_position(board)
+			if score != None:
+				entry.value = float(cmp(score, 0))
+		board.evaluations = entry
+
+		# If we exceed our cache size then empty our cache.
+		if len(self.cache) > NNEvaluator.MAXIMUM_CACHE_ENTRIES:
+			logging.debug("Emptying cache!")
+			self.cache = {}
+
+global_evaluator = NNEvaluator()
+
 class MCTSEdge:
 	def __init__(self, move, child_node, parent_node=None):
 		self.move = move
@@ -160,17 +222,24 @@ class MCTSEdge:
 		self.edge_visits = 0
 		self.edge_total_score = 0
 
+		self.total_weight = 0
+
 	def get_edge_score(self):
-		return self.edge_total_score / self.edge_visits
+#		return self.edge_total_score / (self.edge_visits * (self.edge_visits + 1.0) / 2.0)
+		return self.edge_total_score / self.total_weight
 
 	def adjust_score(self, new_score):
+#		self.edge_visits += 1
+#		self.edge_total_score += new_score * self.edge_visits
 		self.edge_visits += 1
-		self.edge_total_score += new_score
+		weight = (2 + self.edge_visits) ** MCTS.VISIT_WEIGHT_EXPONENT
+		self.edge_total_score += new_score * weight
+		self.total_weight += weight
 
 	def __str__(self):
 		return "<%s %4.1f%% v=%i s=%.5f c=%i>" % (
 			str(self.move),
-			100.0 * self.parent_node.board.ML_posterior[self.move],
+			100.0 * self.parent_node.board.evaluations.posterior[self.move],
 			self.edge_visits,
 			self.get_edge_score(),
 			len(self.child_node.outgoing_edges),
@@ -182,26 +251,28 @@ class MCTSNode:
 		self.parent = parent
 		self.all_edge_visits = 0
 		self.outgoing_edges = {}
-		self.individual_value_score = 0.0
 		self.graph_name_suffix = ""
 
 	def total_action_score(self, move):
 		if move in self.outgoing_edges:
 			edge = self.outgoing_edges[move]
-			u_score = MCTS.exploration_parameter * self.board.ML_posterior[move] * (1.0 + self.all_edge_visits)**0.5 / (1.0 + edge.edge_visits)
+			u_score = MCTS.exploration_parameter * self.board.evaluations.posterior[move] * (1.0 + self.all_edge_visits)**0.5 / (1.0 + edge.edge_visits)
 			Q_score = edge.get_edge_score() if edge.edge_visits > 0 else 0.0
 		else:
-			u_score = MCTS.exploration_parameter * self.board.ML_posterior[move] * (1.0 + self.all_edge_visits)**0.5
+			u_score = MCTS.exploration_parameter * self.board.evaluations.posterior[move] * (1.0 + self.all_edge_visits)**0.5
 			Q_score = 0.0
 		return Q_score + u_score
 
-	def select_action(self):
-		compute_posterior([self.board])
+	def select_action(self, continue_even_if_game_over=False):
+		global_evaluator.populate(self.board)
 		# If we have no legal moves then return None.
-		if not self.board.ML_posterior:
+		if not self.board.evaluations.posterior:
 			return
 			#logging.debug("Board state with no variations: %s" % (self.board.fen(),))
-		return max(self.board.ML_posterior, key=self.total_action_score)
+		# If the game is over and we're not supposed to continue then return None.
+		if self.board.evaluations.game_over and not continue_even_if_game_over:
+			return
+		return max(self.board.evaluations.posterior, key=self.total_action_score)
 
 	def graph_name(self, name_cache):
 		if self not in name_cache:
@@ -236,6 +307,7 @@ class TopN:
 
 class MCTS:
 	exploration_parameter = 1.5 * 2.0
+	VISIT_WEIGHT_EXPONENT = 2.0
 
 	def __init__(self, root_board):
 		self.root_node = MCTSNode(root_board)
@@ -249,7 +321,11 @@ class MCTS:
 					break
 				move = max(node.outgoing_edges.itervalues(), key=lambda edge: edge.edge_visits).move
 			else:
-				move = node.select_action()
+				# XXX: TODO: Document this logic here properly.
+				# Basically, the gist is that sometimes UCI masters will ask to generate a move when the root is already finished (e.g., a draw can be claimed).
+				# Rather than just reporting a totally random move we instead ignore that the game is over.
+				continue_even_if_game_over = node == self.root_node
+				move = node.select_action(continue_even_if_game_over=continue_even_if_game_over)
 			if move not in node.outgoing_edges:
 				break
 			edge = node.outgoing_edges[move]
@@ -273,11 +349,16 @@ class MCTS:
 		else:
 			# 2b) If the move is null, then we had no legal moves, and just propagate the score again.
 			new_node = node
-		# 3) Evaluate the new node.
-		compute_value([new_node.board])
+		# 3a) Evaluate the new node.
+		global_evaluator.populate(new_node.board)
+		# 3b) Queue up some children just for efficiency.
+		for m, probability in new_node.board.evaluations.posterior.iteritems():
+			if probability > NNEvaluator.PROBABILITY_THRESHOLD:
+				new_board = new_node.board.copy(stack=False)
+				new_board.push(m)
+				global_evaluator.add_to_queue(new_board)
 		# Convert the expected value result into a score.
-		value_score = (new_node.board.ML_value + 1) / 2.0
-		new_node.individual_value_score = value_score
+		value_score = (new_node.board.evaluations.value + 1) / 2.0
 		# 4) Backup.
 		inverted = False
 		for edge in reversed(edges_on_path):
@@ -295,9 +376,7 @@ class MCTS:
 			logging.debug(`node is self.root_node`)
 			logging.debug(`move`)
 			logging.debug(`self.root_node.board`)
-			logging.debug(`self.root_node.board.ML_posterior`)
-			compute_posterior([self.root_node.board])
-			logging.debug(`self.root_node.board.ML_posterior`)
+			logging.debug(`self.root_node.board.evaluations.posterior`)
 			#logging.debug(`self.root_node.board.ML_solid_outcome`)
 			logging.debug(`self.root_node.board.result(claim_draw=True)`)
 			logging.debug(`getattr(self.root_node.board, "is_root", "hahabad")`)
@@ -334,8 +413,8 @@ class MCTSEngine:
 #	VISITS = 1200 * 2
 #	MAX_STEPS = 12000 * 2
 #	VISITS = 5000
-	VISITS    = 10000
-	MAX_STEPS = 1000000
+	VISITS    = 10000000
+	MAX_STEPS = 10000000
 	TIME_SAFETY_MARGIN = 0.150
 	IMPORTANCE_FACTOR = {
 		1: 0.1, 2: 0.2,
@@ -344,7 +423,8 @@ class MCTSEngine:
 		7: 0.7, 8: 0.8,
 		9: 0.9,
 	}
-	MAX_STEPS_PER_SECOND = 100.0
+	# XXX: This is awful. Switch this over to run-time benchmarking.
+	MAX_STEPS_PER_SECOND = 375.0
 
 	def __init__(self):
 		self.state = chess.Board()
@@ -371,20 +451,15 @@ class MCTSEngine:
 
 		self.mcts = MCTS(self.state)
 
-	def genmove(self, time_to_think):
-		# XXX: This is so ugly.
-		self.mcts.root_node.board.is_root = True
-		if hasattr(self.mcts.root_node.board, "ML_posterior"):
-			del self.mcts.root_node.board.ML_posterior
-			#compute_posterior([self.mcts.root_node.board])
-		# XXX: End horrifically ugly.
+	def genmove(self, time_to_think, early_out=True):
+		tablebase_move = tb.play_dtz(self.state)
+		if tablebase_move != None:
+			logging.debug(RED + ("Playing tablebase move: %s" % (tablebase_move,)) + ENDC)
+			return tablebase_move
 
 		start_time = time.time()
 		most_visited_edges = TopN(2, key=lambda edge: edge.edge_visits)
 		most_visited_edges.update(self.mcts.root_node.outgoing_edges.itervalues())
-#		most_visited_edge = None
-#		if self.mcts.root_node.outgoing_edges:
-#			most_visited_edge = max(self.mcts.root_node.outgoing_edges.itervalues(), key=lambda edge: edge.edge_visits)
 		total_steps = 0
 		for step_number in xrange(self.MAX_STEPS):
 			now = time.time()
@@ -393,7 +468,7 @@ class MCTSEngine:
 			if remaining_time <= 0.0 and total_steps > 0:
 				break
 			# If we don't have enough time for the number two option to catch up, early out.
-			if len(most_visited_edges.entries) == 2 and total_steps > 0:
+			if early_out and len(most_visited_edges.entries) == 2 and total_steps > 0:
 				runner_up, top_choice = most_visited_edges.entries
 				#logging.debug("Step number: %i runner_up: %r top_choice: %r %r" % (step_number, runner_up, top_choice, remaining_time))
 				if runner_up.edge_visits + remaining_time * MCTSEngine.MAX_STEPS_PER_SECOND < top_choice.edge_visits:
@@ -402,8 +477,6 @@ class MCTSEngine:
 			total_steps += 1
 			visited_edge = self.mcts.step()
 			assert visited_edge.parent_node == self.mcts.root_node
-#			if most_visited_edge is None or visited_edge.edge_visits > most_visited_edge.edge_visits:
-#				most_visited_edge = visited_edge
 			most_visited_edges.add(visited_edge)
 
 			# We early out if we reach our POST value, and just visited the most visited edge.
@@ -415,7 +488,7 @@ class MCTSEngine:
 				logging.debug("Steps: %5i (C=%i/%i Top: %s This: %s)" % (
 					step_number + 1,
 					len(self.mcts.root_node.outgoing_edges),
-					len(self.mcts.root_node.board.ML_posterior),
+					len(self.mcts.root_node.board.evaluations.posterior),
 					(most_visited_edges.entries[-1] if most_visited_edges.entries else None),
 					visited_edge,
 				))
@@ -432,6 +505,7 @@ class MCTSEngine:
 			),
 		))
 		self.print_principal_variation()
+		logging.debug("Cache entries: %i" % (len(global_evaluator.cache),))
 		return most_visited_edges.entries[-1].move
 
 	def genmove_with_time_control(self, our_time, our_increment):
@@ -461,5 +535,37 @@ class MCTSEngine:
 		))
 
 if __name__ == "__main__":
-	__import__("pprint").pprint(sorted(score_moves(chess.Board())))
+	#__import__("pprint").pprint(sorted(score_moves(chess.Board())))
+	logging.basicConfig(
+		format="[%(process)5d] %(message)s",
+		level=logging.DEBUG,
+	)
+	initialize_models()
+	engine = MCTSEngine()
+	for _ in xrange(2):
+		print "Doing warmup evaluation."
+		start = time.time()
+		engine.genmove(0.1)
+		stop = time.time()
+		print "Warmup took:", stop - start
+
+	print "Starting performance section."
+	measure_time = 10.0
+	engine.genmove(measure_time, early_out=False)
+
+	total_visits = engine.mcts.root_node.all_edge_visits
+	print "Total visits:", total_visits
+	print "Ensembles:", len(global_evaluator.ensemble_sizes)
+	print "Average ensemble:", np.average(global_evaluator.ensemble_sizes)
+
+	with open("speeds", "a+") as f:
+		print >>f, "ES=%i  QD=%4i  PT=%.3f  (MT=%f)  append (renorm)  Speed: %f" % (
+			NNEvaluator.ENSEMBLE_SIZE,
+			NNEvaluator.QUEUE_DEPTH,
+			NNEvaluator.PROBABILITY_THRESHOLD,
+			measure_time,
+			total_visits / measure_time,
+		)
+
+	print global_evaluator.ensemble_sizes
 
